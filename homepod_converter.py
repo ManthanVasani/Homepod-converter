@@ -270,6 +270,31 @@ def _shortcuts():
 TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
 
 
+def preflight(path):
+    """Validate everything needed before a conversion can start.
+    Returns an error string, or None if all requirements are met."""
+    if not have_tools():
+        return ("ffmpeg/ffprobe not found. Install ffmpeg and restart "
+                "(macOS: brew install ffmpeg).")
+    if not os.path.isfile(path):
+        return "The source file no longer exists."
+    if not os.access(path, os.R_OK):
+        return "The source file can't be read (permission denied)."
+
+    out_dir = os.path.dirname(path) or "."
+    if not os.access(out_dir, os.W_OK):
+        return "The output folder is read-only — can't save the converted file there."
+
+    try:
+        free = shutil.disk_usage(out_dir).free
+        if free < os.path.getsize(path):
+            return "Not enough free disk space in the output folder."
+    except OSError:
+        pass  # disk check is best-effort; don't block on a stat failure
+
+    return None
+
+
 def _unique_output(path):
     """Pick an .mp4 output path that never overwrites the input or any existing file."""
     base, _ = os.path.splitext(path)
@@ -1196,6 +1221,8 @@ $("#go").addEventListener("click", async () => {
     $("#statusTxt").textContent = res.error || "Failed to start.";
     $("#statusTxt").className = "status-txt err";
     $("#go").disabled = false;
+    hide("#cancelBtn");
+    toast(res.error || "Couldn't start conversion.", "err");
     return;
   }
 
@@ -1391,6 +1418,10 @@ class Handler(BaseHTTPRequestHandler):
             path = os.path.expanduser((body.get("path") or "").strip())
             if not path or not os.path.isfile(path):
                 self._send(200, {"ok": False, "error": "File not found."})
+                return
+            err = preflight(path)
+            if err:
+                self._send(200, {"ok": False, "error": err})
                 return
             opts = body.get("opts") or {}
             job_id = uuid.uuid4().hex[:12]
